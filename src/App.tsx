@@ -26,9 +26,65 @@ export function App() {
   const [customUrl, setCustomUrl] = useState(localStorage.getItem('SUPABASE_URL') || '');
   const [customKey, setCustomKey] = useState(localStorage.getItem('SUPABASE_ANON_KEY') || '');
 
+  // Slippery escaping mouse state
+  const [prankTargetId, setPrankTargetId] = useState<string | null>(null);
+  const [escapeOffset, setEscapeOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [dodgeDuration, setDodgeDuration] = useState<number>(0.35);
+  const lastDodgeTime = useRef<number>(0);
   const isResettingRef = useRef(false);
 
-  // Fetch participants (READ ONLY - no race conditions)
+  // Pick a random participant from the waiting list
+  useEffect(() => {
+    const waiting = participants.filter((p) => !p.is_absent && !p.has_spoken);
+
+    // If there is no target or the target already spoke / is absent, pick a new random waiting member
+    if (waiting.length > 0 && (!prankTargetId || !waiting.some((w) => w.id === prankTargetId))) {
+      const luckyIndex = Math.floor(Math.random() * waiting.length);
+      setPrankTargetId(waiting[luckyIndex].id);
+      setEscapeOffset({ x: 0, y: 0 });
+    } else if (waiting.length === 0) {
+      setPrankTargetId(null);
+    }
+  }, [participants, prankTargetId]);
+
+  // Smooth dodge with randomized duration between 0.3s and 0.5s
+  const handleHoverDodge = (e: React.MouseEvent<HTMLDivElement>) => {
+    const now = Date.now();
+    const currentDurationMs = dodgeDuration * 1000;
+    
+    // Cooldown matches the random duration so it glides smoothly
+    if (now - lastDodgeTime.current < currentDurationMs) return;
+    lastDodgeTime.current = now;
+
+    // Speed range: 0.6s - 1.0s
+    const nextDuration = 0.6 + Math.random() * 0.4;
+    setDodgeDuration(Number(nextDuration.toFixed(2)));
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+
+    // Vector away from cursor entry position
+    const dirX = cursorX < rect.width / 2 ? 1 : -1;
+    const dirY = cursorY < rect.height / 2 ? 1 : -1;
+
+    // Sweet spot jump distance (60px - 90px)
+    const jumpX = dirX * (55 + Math.random() * 35);
+    const jumpY = dirY * (30 + Math.random() * 30);
+
+    setEscapeOffset((prev) => {
+      let nextX = prev.x + jumpX;
+      let nextY = prev.y + jumpY;
+
+      // Keep within bounds so it stays comfortably in view
+      if (Math.abs(nextX) > 130) nextX = -nextX * 0.6;
+      if (Math.abs(nextY) > 70) nextY = -nextY * 0.6;
+
+      return { x: nextX, y: nextY };
+    });
+  };
+
+  // Fetch participants (READ ONLY)
   const fetchParticipants = async () => {
     if (isResettingRef.current) return;
 
@@ -57,16 +113,24 @@ export function App() {
 
     const { data, error } = await supabase
       .from('participants')
-      .select('*')
-      .order('created_at', { ascending: true });
+      .select('*');
 
     if (!error && data) {
-      setParticipants(data);
+      setParticipants((prev) => {
+        if (prev.length > 0) {
+          const map = new Map(data.map((item) => [item.id, item]));
+          const updated = prev.map((p) => map.get(p.id) || p);
+          const existingIds = new Set(prev.map((p) => p.id));
+          const brandNew = data.filter((item) => !existingIds.has(item.id));
+          return [...updated, ...brandNew];
+        }
+        return data;
+      });
     }
     setLoading(false);
   };
 
-  // Seed default members if explicitly requested or empty initial setup
+  // Seed default members
   const seedDefaults = async () => {
     if (!supabase) {
       const initial: Participant[] = DEFAULT_MEMBERS.map((name, i) => ({
@@ -100,8 +164,24 @@ export function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'participants' },
-        () => {
-          if (!isResettingRef.current) {
+        (payload) => {
+          if (isResettingRef.current) return;
+          
+          if (payload.eventType === 'UPDATE') {
+            const updated = payload.new as Participant;
+            setParticipants((prev) =>
+              prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
+            );
+          } else if (payload.eventType === 'INSERT') {
+            const inserted = payload.new as Participant;
+            setParticipants((prev) => {
+              if (prev.some((p) => p.id === inserted.id)) return prev;
+              return [...prev, inserted];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const old = payload.old as { id: string };
+            setParticipants((prev) => prev.filter((p) => p.id !== old.id));
+          } else {
             fetchParticipants();
           }
         }
@@ -152,6 +232,12 @@ export function App() {
   // Toggle spoken
   const toggleSpoken = async (p: Participant) => {
     if (p.is_absent) return;
+
+    // Reset offset when successfully clicked/caught
+    if (p.id === prankTargetId) {
+      setEscapeOffset({ x: 0, y: 0 });
+    }
+
     const nextVal = !p.has_spoken;
 
     // Optimistic UI update
@@ -216,10 +302,11 @@ export function App() {
     await supabase.from('participants').delete().eq('id', p.id);
   };
 
-  // Reset daily cleanly without duplicates
+  // Reset daily
   const handleReset = async () => {
     if (isResettingRef.current) return;
     isResettingRef.current = true;
+    setEscapeOffset({ x: 0, y: 0 });
     setIsResetting(true);
 
     const defaultList: Participant[] = DEFAULT_MEMBERS.map((name, i) => ({
@@ -229,7 +316,6 @@ export function App() {
       is_absent: false,
     }));
 
-    // Optimistic UI update immediately
     setParticipants(defaultList);
 
     if (!supabase) {
@@ -240,16 +326,12 @@ export function App() {
     }
 
     try {
-      // 1. Get all current row IDs
       const { data: existing } = await supabase.from('participants').select('id');
-      
-      // 2. Delete existing rows
       if (existing && existing.length > 0) {
         const ids = existing.map((r) => r.id);
         await supabase.from('participants').delete().in('id', ids);
       }
 
-      // 3. Insert the 12 clean default members
       const rows = DEFAULT_MEMBERS.map((name) => ({
         name,
         has_spoken: false,
@@ -257,11 +339,9 @@ export function App() {
       }));
       await supabase.from('participants').insert(rows);
 
-      // 4. Reload clean list from Supabase
       const { data: fresh } = await supabase
         .from('participants')
-        .select('*')
-        .order('created_at', { ascending: true });
+        .select('*');
 
       if (fresh) {
         setParticipants(fresh);
@@ -285,8 +365,13 @@ export function App() {
   const activeParticipants = participants.filter((p) => !p.is_absent);
   const spokenCount = activeParticipants.filter((p) => p.has_spoken).length;
 
+  const waitingList = participants.filter((p) => !p.is_absent && !p.has_spoken);
+  const spokenList = participants.filter((p) => !p.is_absent && p.has_spoken);
+  const absentList = participants.filter((p) => p.is_absent);
+  const displayList = [...waitingList, ...spokenList, ...absentList];
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex justify-center p-4 sm:p-8">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex justify-center p-4 sm:p-8 overflow-x-hidden">
       <div className="w-full max-w-lg flex flex-col gap-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 pb-4">
@@ -382,10 +467,10 @@ export function App() {
         </form>
 
         {/* Participants List */}
-        <div className="flex flex-col gap-2.5 transition-all duration-300">
+        <div className="flex flex-col gap-2">
           {loading ? (
             <div className="text-center py-8 text-sm text-slate-400">Loading standup...</div>
-          ) : participants.length === 0 ? (
+          ) : displayList.length === 0 ? (
             <div className="text-center py-10 bg-white border border-dashed border-slate-300 rounded-xl text-slate-500 text-sm flex flex-col items-center gap-3">
               <span>No participants yet.</span>
               <button
@@ -396,56 +481,47 @@ export function App() {
               </button>
             </div>
           ) : (
-            [...participants]
-              .sort((a, b) => {
-                // 1. Absent to the very bottom
-                if (a.is_absent !== b.is_absent) return a.is_absent ? 1 : -1;
-                // 2. Spoken to the bottom of active participants
-                if (a.has_spoken !== b.has_spoken) return a.has_spoken ? 1 : -1;
-                // 3. Stable order
-                return (a.created_at || a.id).localeCompare(b.created_at || b.id);
-              })
-              .map((p) => (
+            displayList.map((p) => {
+              const isPrankTarget = p.id === prankTargetId;
+              const style = isPrankTarget
+                ? {
+                    transform: `translate(${escapeOffset.x}px, ${escapeOffset.y}px)`,
+                    transition: `transform ${dodgeDuration}s cubic-bezier(0.25, 1, 0.5, 1)`,
+                    zIndex: 30,
+                  }
+                : undefined;
+
+              return (
                 <div
                   key={p.id}
                   onClick={() => toggleSpoken(p)}
-                  className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all duration-300 ease-out select-none cursor-pointer transform active:scale-[0.99] ${
+                  onMouseEnter={isPrankTarget ? handleHoverDodge : undefined}
+                  onMouseMove={isPrankTarget ? handleHoverDodge : undefined}
+                  style={style}
+                  className={`flex items-center justify-between p-3 rounded-xl border select-none cursor-pointer relative will-change-transform ${
                     p.is_absent
-                      ? 'bg-slate-100/70 border-slate-200 opacity-50 translate-y-0.5'
+                      ? 'bg-slate-100 border-slate-200 opacity-60'
                       : p.has_spoken
-                      ? 'bg-emerald-50/80 border-emerald-200/80 text-emerald-950 translate-y-0.5 shadow-2xs'
-                      : 'bg-white border-slate-200 hover:border-emerald-300 hover:shadow-sm text-slate-900 shadow-xs'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                      : 'bg-white border-slate-200 hover:border-slate-300 text-slate-900 shadow-xs'
                   }`}
                 >
                   {/* Left side: Checkbox + Name */}
-                  <div className="flex items-center gap-3.5">
-                    <div
-                      className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all duration-200 ${
-                        p.has_spoken
-                          ? 'bg-emerald-600 border-emerald-600 scale-105 shadow-xs'
-                          : 'border-slate-300 bg-white group-hover:border-emerald-400'
-                      }`}
-                    >
-                      {p.has_spoken && (
-                        <svg
-                          className="w-3.5 h-3.5 text-white animate-in zoom-in-75 duration-200"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth="3"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={p.has_spoken}
+                      disabled={p.is_absent}
+                      onChange={() => toggleSpoken(p)}
+                      className="w-5 h-5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                    />
                     <span
-                      className={`text-sm font-medium transition-all duration-200 ${
+                      className={`text-sm font-medium ${
                         p.is_absent
                           ? 'line-through text-slate-400'
                           : p.has_spoken
-                          ? 'text-emerald-900/80 font-normal line-through decoration-emerald-500/50'
-                          : 'text-slate-800 font-medium'
+                          ? 'text-emerald-900 font-semibold'
+                          : 'text-slate-800'
                       }`}
                     >
                       {p.name}
@@ -453,13 +529,13 @@ export function App() {
                   </div>
 
                   {/* Right side: Absent button + Delete button */}
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     <button
                       onClick={(e) => toggleAbsent(p, e)}
-                      className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+                      className={`text-xs px-2 py-1 rounded font-medium transition cursor-pointer ${
                         p.is_absent
-                          ? 'bg-slate-200 hover:bg-slate-300 text-slate-800 shadow-2xs'
-                          : 'bg-slate-100/80 hover:bg-slate-200 text-slate-600'
+                          ? 'bg-slate-300 text-slate-800'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                       }`}
                       title={p.is_absent ? 'Mark Present' : 'Mark Absent'}
                     >
@@ -476,14 +552,15 @@ export function App() {
 
                     <button
                       onClick={(e) => handleDelete(p, e)}
-                      className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 transition rounded-md cursor-pointer"
+                      className="p-1 text-slate-400 hover:text-red-500 transition rounded cursor-pointer"
                       title="Remove participant"
                     >
                       <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
-              ))
+              );
+            })
           )}
         </div>
       </div>
