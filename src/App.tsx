@@ -382,7 +382,7 @@ export function App() {
         </form>
 
         {/* Participants List */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2.5 transition-all duration-300">
           {loading ? (
             <div className="text-center py-8 text-sm text-slate-400">Loading standup...</div>
           ) : participants.length === 0 ? (
@@ -396,72 +396,94 @@ export function App() {
               </button>
             </div>
           ) : (
-            participants.map((p) => (
-              <div
-                key={p.id}
-                onClick={() => toggleSpoken(p)}
-                className={`flex items-center justify-between p-3 rounded-xl border transition select-none cursor-pointer ${
-                  p.is_absent
-                    ? 'bg-slate-100 border-slate-200 opacity-60'
-                    : p.has_spoken
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-                    : 'bg-white border-slate-200 hover:border-slate-300 text-slate-900 shadow-xs'
-                }`}
-              >
-                {/* Left side: Checkbox + Name */}
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={p.has_spoken}
-                    disabled={p.is_absent}
-                    onChange={() => toggleSpoken(p)}
-                    className="w-5 h-5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                  />
-                  <span
-                    className={`text-sm font-medium ${
-                      p.is_absent
-                        ? 'line-through text-slate-400'
-                        : p.has_spoken
-                        ? 'text-emerald-900 font-semibold'
-                        : 'text-slate-800'
-                    }`}
-                  >
-                    {p.name}
-                  </span>
-                </div>
+            [...participants]
+              .sort((a, b) => {
+                // 1. Absent to the very bottom
+                if (a.is_absent !== b.is_absent) return a.is_absent ? 1 : -1;
+                // 2. Spoken to the bottom of active participants
+                if (a.has_spoken !== b.has_spoken) return a.has_spoken ? 1 : -1;
+                // 3. Stable order
+                return (a.created_at || a.id).localeCompare(b.created_at || b.id);
+              })
+              .map((p) => (
+                <div
+                  key={p.id}
+                  onClick={() => toggleSpoken(p)}
+                  className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all duration-300 ease-out select-none cursor-pointer transform active:scale-[0.99] ${
+                    p.is_absent
+                      ? 'bg-slate-100/70 border-slate-200 opacity-50 translate-y-0.5'
+                      : p.has_spoken
+                      ? 'bg-emerald-50/80 border-emerald-200/80 text-emerald-950 translate-y-0.5 shadow-2xs'
+                      : 'bg-white border-slate-200 hover:border-emerald-300 hover:shadow-sm text-slate-900 shadow-xs'
+                  }`}
+                >
+                  {/* Left side: Checkbox + Name */}
+                  <div className="flex items-center gap-3.5">
+                    <div
+                      className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all duration-200 ${
+                        p.has_spoken
+                          ? 'bg-emerald-600 border-emerald-600 scale-105 shadow-xs'
+                          : 'border-slate-300 bg-white group-hover:border-emerald-400'
+                      }`}
+                    >
+                      {p.has_spoken && (
+                        <svg
+                          className="w-3.5 h-3.5 text-white animate-in zoom-in-75 duration-200"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
 
-                {/* Right side: Absent button + Delete button */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={(e) => toggleAbsent(p, e)}
-                    className={`text-xs px-2 py-1 rounded font-medium transition cursor-pointer ${
-                      p.is_absent
-                        ? 'bg-slate-300 text-slate-800'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                    }`}
-                    title={p.is_absent ? 'Mark Present' : 'Mark Absent'}
-                  >
-                    {p.is_absent ? (
-                      <span className="flex items-center gap-1">
-                        <UserCheck size={13} /> Present
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1">
-                        <UserX size={13} /> Absent
-                      </span>
-                    )}
-                  </button>
+                    <span
+                      className={`text-sm font-medium transition-all duration-200 ${
+                        p.is_absent
+                          ? 'line-through text-slate-400'
+                          : p.has_spoken
+                          ? 'text-emerald-900/80 font-normal line-through decoration-emerald-500/50'
+                          : 'text-slate-800 font-medium'
+                      }`}
+                    >
+                      {p.name}
+                    </span>
+                  </div>
 
-                  <button
-                    onClick={(e) => handleDelete(p, e)}
-                    className="p-1 text-slate-400 hover:text-red-500 transition rounded cursor-pointer"
-                    title="Remove participant"
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {/* Right side: Absent button + Delete button */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => toggleAbsent(p, e)}
+                      className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+                        p.is_absent
+                          ? 'bg-slate-200 hover:bg-slate-300 text-slate-800 shadow-2xs'
+                          : 'bg-slate-100/80 hover:bg-slate-200 text-slate-600'
+                      }`}
+                      title={p.is_absent ? 'Mark Present' : 'Mark Absent'}
+                    >
+                      {p.is_absent ? (
+                        <span className="flex items-center gap-1">
+                          <UserCheck size={13} /> Present
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <UserX size={13} /> Absent
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={(e) => handleDelete(p, e)}
+                      className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 transition rounded-md cursor-pointer"
+                      title="Remove participant"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))
           )}
         </div>
       </div>
