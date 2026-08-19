@@ -26,63 +26,7 @@ export function App() {
   const [customUrl, setCustomUrl] = useState(localStorage.getItem('SUPABASE_URL') || '');
   const [customKey, setCustomKey] = useState(localStorage.getItem('SUPABASE_ANON_KEY') || '');
 
-  // Slippery escaping mouse state
-  const [prankTargetId, setPrankTargetId] = useState<string | null>(null);
-  const [escapeOffset, setEscapeOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [dodgeDuration, setDodgeDuration] = useState<number>(0.35);
-  const lastDodgeTime = useRef<number>(0);
   const isResettingRef = useRef(false);
-
-  // Pick a random participant from the waiting list
-  useEffect(() => {
-    const waiting = participants.filter((p) => !p.is_absent && !p.has_spoken);
-
-    // If there is no target or the target already spoke / is absent, pick a new random waiting member
-    if (waiting.length > 0 && (!prankTargetId || !waiting.some((w) => w.id === prankTargetId))) {
-      const luckyIndex = Math.floor(Math.random() * waiting.length);
-      setPrankTargetId(waiting[luckyIndex].id);
-      setEscapeOffset({ x: 0, y: 0 });
-    } else if (waiting.length === 0) {
-      setPrankTargetId(null);
-    }
-  }, [participants, prankTargetId]);
-
-  // Smooth dodge with randomized duration between 0.3s and 0.5s
-  const handleHoverDodge = (e: React.MouseEvent<HTMLDivElement>) => {
-    const now = Date.now();
-    const currentDurationMs = dodgeDuration * 1000;
-    
-    // Cooldown matches the random duration so it glides smoothly
-    if (now - lastDodgeTime.current < currentDurationMs) return;
-    lastDodgeTime.current = now;
-
-    // Speed range: 0.6s - 1.0s
-    const nextDuration = 0.6 + Math.random() * 0.4;
-    setDodgeDuration(Number(nextDuration.toFixed(2)));
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
-
-    // Vector away from cursor entry position
-    const dirX = cursorX < rect.width / 2 ? 1 : -1;
-    const dirY = cursorY < rect.height / 2 ? 1 : -1;
-
-    // Sweet spot jump distance (60px - 90px)
-    const jumpX = dirX * (55 + Math.random() * 35);
-    const jumpY = dirY * (30 + Math.random() * 30);
-
-    setEscapeOffset((prev) => {
-      let nextX = prev.x + jumpX;
-      let nextY = prev.y + jumpY;
-
-      // Keep within bounds so it stays comfortably in view
-      if (Math.abs(nextX) > 130) nextX = -nextX * 0.6;
-      if (Math.abs(nextY) > 70) nextY = -nextY * 0.6;
-
-      return { x: nextX, y: nextY };
-    });
-  };
 
   // Fetch participants (READ ONLY)
   const fetchParticipants = async () => {
@@ -233,11 +177,6 @@ export function App() {
   const toggleSpoken = async (p: Participant) => {
     if (p.is_absent) return;
 
-    // Reset offset when successfully clicked/caught
-    if (p.id === prankTargetId) {
-      setEscapeOffset({ x: 0, y: 0 });
-    }
-
     const nextVal = !p.has_spoken;
 
     // Optimistic UI update
@@ -306,7 +245,6 @@ export function App() {
   const handleReset = async () => {
     if (isResettingRef.current) return;
     isResettingRef.current = true;
-    setEscapeOffset({ x: 0, y: 0 });
     setIsResetting(true);
 
     const defaultList: Participant[] = DEFAULT_MEMBERS.map((name, i) => ({
@@ -482,23 +420,11 @@ export function App() {
             </div>
           ) : (
             displayList.map((p) => {
-              const isPrankTarget = p.id === prankTargetId;
-              const style = isPrankTarget
-                ? {
-                    transform: `translate(${escapeOffset.x}px, ${escapeOffset.y}px)`,
-                    transition: `transform ${dodgeDuration}s cubic-bezier(0.25, 1, 0.5, 1)`,
-                    zIndex: 30,
-                  }
-                : undefined;
-
               return (
                 <div
                   key={p.id}
                   onClick={() => toggleSpoken(p)}
-                  onMouseEnter={isPrankTarget ? handleHoverDodge : undefined}
-                  onMouseMove={isPrankTarget ? handleHoverDodge : undefined}
-                  style={style}
-                  className={`flex items-center justify-between p-3 rounded-xl border select-none cursor-pointer relative will-change-transform ${
+                  className={`flex items-center justify-between p-3 rounded-xl border select-none cursor-pointer ${
                     p.is_absent
                       ? 'bg-slate-100 border-slate-200 opacity-60'
                       : p.has_spoken
